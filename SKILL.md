@@ -4,7 +4,7 @@ description: Creates a concise, personalized University of Macau daily digest fr
 license: MIT
 metadata:
   author: winterbluefire0
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # UM Today Digest
@@ -29,7 +29,7 @@ Do not ask for a UM email password, student number, one-time code, or mailbox ac
 Some registration or internal-service links may require the user to sign in after
 opening them. Label that clearly and let the user complete the sign-in themselves.
 
-## First use
+## First use and onboarding
 
 If the user has not supplied preferences, collect only the fields that materially
 change the recommendations:
@@ -42,6 +42,11 @@ change the recommendations:
 
 Do not block an immediate digest on a long questionnaire. One compact question or
 reasonable user-approved defaults are enough; unknown preferences remain unknown.
+
+After the user answers, retrieve current information and produce the first digest in
+the same conversation. If the request includes daily delivery, continue through
+scheduling and report whether the recurring task was actually created. Installation,
+the first digest, and the recurring task are three separate outcomes; state each one.
 
 ## Retrieve current information
 
@@ -60,6 +65,10 @@ The newest issue may be from the previous working day. Treat “no new weekend o
 holiday issue” as normal, not as a failure. Never present an old issue as published
 today; always show its actual issue date.
 
+Check `source_status` and `warnings` in script output. Continue with the sources that
+succeeded and disclose the missing source and its last known date. If every source
+fails, do not produce a fresh digest.
+
 ## Select and rank
 
 Apply hard exclusions before preference ranking:
@@ -76,10 +85,18 @@ Then rank by explicit interests, time compatibility, audience fit, deadline urge
 location convenience, and the user's earlier feedback. Do not invent eligibility,
 remaining seats, registration success, attendance credit, or organiser approval.
 
+Before presenting a shortlisted notice, open its linked official detail page when
+accessible. Extract the event date, application deadline, intended audience,
+registration path, and advertised credit or prize. If the detail page requires UM
+login or cannot be read, label those fields as unverified instead of inferring them
+from the title.
+
 ## Digest format
 
-Default to three to five recommendations. Use the user's preferred language and keep
-the digest readable on a phone. For each item include:
+Begin with a two- or three-sentence campus overview: the issue date, the main types of
+activity available, and any urgent deadline. Then give three to five personalized
+recommendations. Use the user's preferred language and keep the digest readable on a
+phone. For each item include:
 
 - title;
 - date, time, and venue when available;
@@ -97,7 +114,8 @@ this`. Update preferences only from the user's explicit response.
 ## Recurring delivery
 
 Create, change, or disable a recurring task only after the user explicitly requests
-it. Read [references/scheduling.md](references/scheduling.md) before doing so.
+it. Read [references/scheduling.md](references/scheduling.md) and
+[references/state.md](references/state.md) before doing so.
 
 If the host supports native scheduling, prefer that mechanism. If it does not,
 explain the limitation and offer an on-demand digest. A successful installation of
@@ -110,5 +128,8 @@ this Skill does not by itself prove that recurring delivery has been configured.
   user's explicit request and any confirmation required by the host.
 - Stay quiet on scheduled runs when there is no new issue, no changed deadline, and
   no newly relevant event.
+- Save only the minimum non-sensitive profile and delivery history described in
+  [references/state.md](references/state.md). Never put private state in the public
+  Skill repository.
 - If retrieval fails, report the failing source and retain the last verified digest
   as dated information; do not fabricate a fresh result.

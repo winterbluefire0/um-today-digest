@@ -16,15 +16,17 @@ from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 ARCHIVE_URL = "https://www.um.edu.mo/um-today/"
 ISSUE_URL = "https://www.um.edu.mo/um-today/detail/{date}/"
 ICAL_URL = "https://www.um.edu.mo/eventscalendar/?ical=1"
-USER_AGENT = "um-today-digest/0.1 (+https://github.com/winterbluefire0/um-today-digest)"
+USER_AGENT = "um-today-digest/0.2 (+https://github.com/winterbluefire0/um-today-digest)"
 MACAU = ZoneInfo("Asia/Macau")
+FETCH_EXCEPTIONS = (HTTPError, URLError, TimeoutError, ValueError, OSError)
+ALL_ERRORS = FETCH_EXCEPTIONS + (RuntimeError,)
 
 
 def fetch_text(url: str, timeout: int = 20) -> str:
@@ -105,6 +107,7 @@ def classify_issue_tables(issue_html: str, issue_url: str) -> dict[str, Any]:
                     "title": texts[1],
                     "venue": texts[2],
                     "url": links[0] if links else None,
+                    "access": "public_details",
                 }
                 key = (event["time"], event["title"], event["venue"], event["url"])
                 if key not in seen_events:
@@ -112,11 +115,27 @@ def classify_issue_tables(issue_html: str, issue_url: str) -> dict[str, Any]:
                     seen_events.add(key)
             elif len(cells) >= 2 and texts[0] and not texts[0].lower().startswith("more "):
                 links = cells[0].get("links", [])
+                if not links:
+                    continue
+                notice_url = links[0]
+                hostname = (urlparse(notice_url).hostname or "").lower()
+                if (
+                    hostname == "myum.um.edu.mo"
+                    or "online services and information" in texts[0].lower()
+                ):
+                    continue
+                if hostname != "um.edu.mo" and not hostname.endswith(".um.edu.mo"):
+                    continue
                 notice = {
                     "table": table_index,
                     "title": texts[0],
                     "department": texts[1],
-                    "url": links[0] if links else None,
+                    "url": notice_url,
+                    "access": (
+                        "um_login_may_be_required"
+                        if hostname in {"e-bulletin.um.edu.mo", "myum.um.edu.mo"}
+                        else "public_details"
+                    ),
                 }
                 key = (notice["title"], notice["department"], notice["url"])
                 if key not in seen_notices:
@@ -154,7 +173,14 @@ def parse_ical_datetime(key: str, value: str) -> datetime | None:
         if value.endswith("Z"):
             return datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
         parsed = datetime.strptime(value, "%Y%m%dT%H%M%S")
-        return parsed.replace(tzinfo=MACAU if "TZID=Asia/Macau" in key else MACAU)
+        tzid_match = re.search(r"(?:^|;)TZID=([^;:]+)", key)
+        zone = MACAU
+        if tzid_match:
+            try:
+                zone = ZoneInfo(tzid_match.group(1).strip('"'))
+            except (KeyError, ValueError):
+                zone = MACAU
+        return parsed.replace(tzinfo=zone)
     except ValueError:
         return None
 
@@ -176,10 +202,15 @@ def parse_ical(text: str, start: datetime, days: int) -> list[dict[str, Any]]:
             event_start = parse_ical_datetime(*start_entries[0]) if start_entries else None
             event_end = parse_ical_datetime(*end_entries[0]) if end_entries else None
             horizon = start + timedelta(days=days)
-            if event_start and event_end and event_end < start:
+            status = normalized.get("STATUS", "CONFIRMED").strip().upper()
+            if status == "CANCELLED" or event_start is None:
                 current = None
                 continue
-            if event_start and event_start > horizon:
+            effective_end = event_end or event_start
+            if effective_end <= start:
+                current = None
+                continue
+            if event_start > horizon:
                 current = None
                 continue
             events.append(
@@ -193,6 +224,8 @@ def parse_ical(text: str, start: datetime, days: int) -> list[dict[str, Any]]:
                     "categories": ical_unescape(normalized.get("CATEGORIES", "")),
                     "url": normalized.get("URL"),
                     "last_modified": normalized.get("LAST-MODIFIED"),
+                    "status": status,
+                    "access": "public_details",
                 }
             )
             current = None
@@ -207,20 +240,50 @@ def parse_ical(text: str, start: datetime, days: int) -> list[dict[str, Any]]:
 
 
 def build_payload(days: int) -> dict[str, Any]:
-    archive_html = fetch_text(ARCHIVE_URL)
-    issue_date, issue_url = discover_latest_issue(archive_html)
-    issue_html = fetch_text(issue_url)
-    calendar_text = fetch_text(ICAL_URL)
     now = datetime.now(MACAU)
+    warnings: list[dict[str, str]] = []
+    source_status: dict[str, dict[str, Any]] = {
+        "archive": {"url": ARCHIVE_URL, "ok": False},
+        "issue": {"url": None, "ok": False, "skipped": True},
+        "calendar": {"url": ICAL_URL, "ok": False},
+    }
+    issue_url: str | None = None
+    latest_issue: dict[str, Any] | None = None
+    calendar_events: list[dict[str, Any]] = []
+
+    try:
+        archive_html = fetch_text(ARCHIVE_URL)
+        issue_date, issue_url = discover_latest_issue(archive_html)
+        source_status["archive"]["ok"] = True
+        source_status["issue"] = {"url": issue_url, "ok": False}
+        latest_issue = {"date": issue_date, "url": issue_url, "events": [], "notices": []}
+        try:
+            issue_html = fetch_text(issue_url)
+            latest_issue.update(classify_issue_tables(issue_html, issue_url))
+            source_status["issue"]["ok"] = True
+        except FETCH_EXCEPTIONS as exc:
+            warnings.append({"source": "issue", "url": issue_url, "error": str(exc)})
+    except FETCH_EXCEPTIONS as exc:
+        warnings.append({"source": "archive", "url": ARCHIVE_URL, "error": str(exc)})
+
+    try:
+        calendar_text = fetch_text(ICAL_URL)
+        calendar_events = parse_ical(calendar_text, now, days)
+        source_status["calendar"]["ok"] = True
+    except FETCH_EXCEPTIONS as exc:
+        warnings.append({"source": "calendar", "url": ICAL_URL, "error": str(exc)})
+
+    if not source_status["archive"]["ok"] and not source_status["calendar"]["ok"]:
+        detail = "; ".join(f"{item['source']}: {item['error']}" for item in warnings)
+        raise RuntimeError(f"All public UM sources failed ({detail})")
+
     return {
         "generated_at": now.isoformat(),
         "sources": {"archive": ARCHIVE_URL, "issue": issue_url, "calendar": ICAL_URL},
-        "latest_issue": {
-            "date": issue_date,
-            "url": issue_url,
-            **classify_issue_tables(issue_html, issue_url),
-        },
-        "calendar_events": parse_ical(calendar_text, now, days),
+        "source_status": source_status,
+        "warnings": warnings,
+        "latest_issue": latest_issue,
+        "calendar_events": calendar_events,
     }
 
 
@@ -233,7 +296,7 @@ def main() -> int:
         parser.error("--days must be between 1 and 366")
     try:
         payload = build_payload(args.days)
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+    except ALL_ERRORS as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1
     print(json.dumps(payload, ensure_ascii=False, indent=2))

@@ -9,8 +9,8 @@ monitoring, reminders, or an automatic daily digest.
    clear. Default to `09:40 Asia/Macau` only when the user accepts the default.
 2. Use the host agent's native scheduler, automation, heartbeat, or cron facility.
 3. Save a cohesive job prompt that invokes `um-today-digest`, fetches the newest
-   public sources, applies the saved non-sensitive preferences, and suppresses
-   unchanged output.
+   public sources, applies the saved non-sensitive preferences, checks the delivery
+   history described in [state.md](state.md), and suppresses unchanged output.
 4. Tell the user what was scheduled, including time, timezone, destination, and how
    to pause or remove it.
 
@@ -24,7 +24,8 @@ Use the um-today-digest skill to check the public University of Macau UM Today
 archive and event calendar. Apply my saved non-sensitive interests and availability.
 Send three to five newly relevant events or urgent deadlines with reasons and
 official links. Stay quiet when there is no new issue, changed deadline, or newly
-relevant event. Never request or use my UM email password.
+relevant event. After a successful delivery, record the issue date and stable IDs or
+canonical URLs of the delivered items. Never request or use my UM email password.
 ```
 
 ## Host adaptations

@@ -2,4 +2,4 @@ interface:
   display_name: "今日澳大智能日报"
   short_description: "每天从今日澳大中筛选真正与你相关的校园活动、机会与截止日期"
   brand_color: "#7A1F3D"
-  default_prompt: "Use $um-today-digest to generate my latest personalized UM campus digest."
+  default_prompt: "Use $um-today-digest to ask one compact preference question, generate my first UM campus digest, and help me schedule future delivery."
